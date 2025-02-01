@@ -1,28 +1,69 @@
 #![allow(unused)]
 
 use std::{
-    io,
+    io::{self, Write},
+    net::TcpStream,
     process::{Command, Stdio},
     time::Duration,
 };
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 
 mod server;
 use server::*;
 
-mod utils;
+mod file_utils;
+mod packet_utils;
 
 /// A horribly written wallpaper engine
-#[derive(Parser)]
+#[derive(Debug, Parser)]
+#[clap(group(
+    ArgGroup::new("action")
+    .required(true)
+    .args(&["directory", "wallpaper", "next", "get_dir", "set_dir", "kill"])
+))]
 struct Args {
+    /// The wallpaper to immediately set
+    #[arg(short, long)]
+    wallpaper: Option<String>,
+
+    /// Cycles to the next wallpaper
+    #[arg(short, long, default_value_t = false)]
+    next: bool,
+
+    /// Gets the directory the engine is currently cycling through
+    #[arg(short, long = "get-dir")]
+    get_dir: bool,
+
+    /// Sets the directory the engine should cycle through
+    #[arg(short, long = "set-dir")]
+    set_dir: Option<String>,
+
     /// Start the Wallpaper server in the background
-    #[arg(long = "start-server")]
-    start_server: Option<String>,
+    #[arg(long = "start")]
+    directory: Option<String>,
 
     /// Runs the Wallpaper server in the current terminal
-    #[arg(requires = "start_server", long = "run-here", default_value_t = false)]
+    #[arg(
+        requires = "directory",
+        short,
+        long = "run-here",
+        default_value_t = false
+    )]
     run_here: bool,
+
+    // Kills the currently running server
+    #[arg(short, long, default_value_t = false)]
+    kill: bool,
+
+    /* DEFAULT VALUE GLOBAL PARAMETERS */
+    /// Sets the address of the server
+    #[arg(short, long = "addr", default_value_t = String::from("127.0.0.1"))]
+    address: String,
+
+    /// Sets the port of the server
+    #[arg(short, long = "port", default_value_t = 6969)]
+    port: u64,
 
     /// Show all logs
     #[arg(short, long, default_value_t = false)]
@@ -43,13 +84,19 @@ fn main() {
             .init();
     }
 
-    if args.start_server.is_some() {
-        let directory = args.start_server.unwrap();
+    if args.directory.is_some() {
+        let directory = args.directory.unwrap();
+
         match args.run_here {
             // Starts continuous server. If any error was encountered during setup,
             // the message will have been logged, so here we can just exit(1);
             true => {
-                let mut server = WallpaperServer::new(directory);
+                let mut server = WallpaperServer::new(
+                    directory,
+                    args.duration,
+                    format!("{}:{}", args.address, args.port),
+                )
+                .unwrap();
                 match server.start() {
                     Ok(_) => {}
                     Err(e) => {
@@ -59,10 +106,11 @@ fn main() {
                 }
             }
             false => {
+                // TODO: Find a better way to implement background processes and disowning
                 log::info!("Spawning server child process...");
                 let mut child = Command::new("setsid")
                     .arg(std::env::args().next().unwrap())
-                    .arg("--start-server")
+                    .arg("--start")
                     .arg(directory)
                     .arg("--run-here")
                     .stdin(Stdio::null())
@@ -77,19 +125,73 @@ fn main() {
                     Ok(status) => match status {
                         Some(status) => {
                             if !status.code().is_some_and(|c| c == 0) {
-                                log::error!("There was a problem starting the server. Please check the logs to view the problem.")
+                                eprintln!("There was a problem starting the server. This usually means the server is already running or the port is in use. Please check the logs to view the problem.")
                             } else {
-                                log::error!("The server seems to have exitd successfully. Not sure why this happened, but we'll take it.")
+                                eprintln!("The server seems to have exited successfully. Not sure why this happened, but we'll take it.")
                             }
                         }
                         None => {
-                            log::info!("Server child process (most likely) spawned successfully!")
+                            eprintln!("Server child process (most likely) spawned successfully!")
                         }
                     },
                     Err(e) => {
-                        log::error!("Ran into unexpected error: {e}");
+                        eprintln!("Ran into unexpected error: {e}");
                     }
                 }
+            }
+        }
+        std::process::exit(0);
+    }
+
+    let address = format!("{}:{}", args.address, args.port);
+
+    if args.wallpaper.is_some() {
+        match packet_utils::send_request("Update", Some(args.wallpaper.clone().unwrap()), &address)
+        {
+            Ok(response) => println!("{response}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if args.next {
+        match packet_utils::send_request("Cycle", None, &address) {
+            Ok(response) => println!("{response}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if args.get_dir {
+        match packet_utils::send_request("GetDir", None, &address) {
+            Ok(response) => println!("{response}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if args.set_dir.is_some() {
+        match packet_utils::send_request("SetDir", Some(args.set_dir.clone().unwrap()), &address) {
+            Ok(response) => println!("{response}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if args.kill {
+        match packet_utils::send_request("Stop", None, &address) {
+            Ok(response) => println!("{response}"),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
             }
         }
     }

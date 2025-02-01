@@ -74,71 +74,49 @@ pub fn decode_packet<'a>(packet_buffer: Vec<u8>) -> Result<WallpaperPacket, Pack
     Ok(WallpaperPacket { headers, body })
 }
 
-/// Builts a packet with standard, yet minimal HTTP headers along with an optional body
-pub fn build_packet(successful: bool, body: Option<String>) -> String {
-    let status_line = if successful {
-        "200 OK"
-    } else {
-        "400 Bad Request"
-    };
+/// Builts a request with standard, yet minimal HTTP headers along with an optional body
+fn build_request(command: &str, body: Option<String>) -> String {
     let body = body.unwrap_or(String::from(""));
     format!(
-        "HTTP/1.1 {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-        status_line,
+        "POST HTTP/1.1\r\nWallpaperControl: {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+        command,
         body.len(),
         body
     )
 }
 
-#[derive(Debug)]
-pub struct HyprpaperError(pub String);
+/// Sends a wallpaper request and captures the response data, propagating any errors encountered
+pub fn send_request(
+    command: &str,
+    body: Option<String>,
+    address: &str,
+) -> Result<String, Box<dyn Error>> {
+    let mut stream = TcpStream::connect(address)?;
 
-impl Display for HyprpaperError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl Error for HyprpaperError {}
+    let request = build_request(command, body);
+    stream.write_all(request.as_bytes())?;
 
-pub fn hyprpaper_update(path: &str) -> Result<(), Box<dyn Error>> {
-    let preload = format!("hyprctl hyprpaper preload {}", path);
+    let response_bytes = extract_bytes_buffered(&mut stream)?;
 
-    let stdout = exec_command(&preload)?;
-    if stdout != "ok\n" {
-        return Err(Box::from(HyprpaperError(stdout)));
-    }
+    let response = decode_packet(response_bytes)?;
 
-    let load = format!("hyprctl hyprpaper wallpaper \', {}\'", path);
-    let stdout = exec_command(&load)?;
-    if stdout != "ok\n" {
-        return Err(Box::from(HyprpaperError(stdout)));
-    }
-
-    let unload_unused = format!("hyprctl hyprpaper unload unused");
-    let stdout = exec_command(&unload_unused)?;
-    if stdout != "ok\n" {
-        return Err(Box::new(HyprpaperError(stdout)));
-    }
-    Ok(())
+    Ok(response.body)
 }
 
-pub fn exec_command(command: &str) -> io::Result<String> {
-    let output = std::process::Command::new("bash")
-        .arg("-c")
-        .arg(command)
-        .output()?;
-
-    Ok(output.stdout.iter().map(|&c| char::from(c)).collect())
-}
-
-#[test]
-fn test_hyprpaper() {
-    let result = hyprpaper_update("~/Pictures/Backgrounds/ssgvegeta.png").unwrap();
+/// Builts a response packet with standard, yet minimal HTTP headers along with an optional body
+pub fn build_response(status: u64, body: Option<String>) -> String {
+    let body = body.unwrap_or(String::from(""));
+    format!(
+        "HTTP/1.1 {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+        status,
+        body.len(),
+        body
+    )
 }
 
 /// Helper function to send an empty TCP response with Status 400
 pub fn send_empty_response(mut stream: &TcpStream) {
-    let response = build_packet(false, None);
+    let response = build_response(400, None);
     log::info!("Replying with packet:\n{response}");
     match stream.write_all(response.as_bytes()) {
         Ok(_) => {}
@@ -154,7 +132,7 @@ pub fn send_empty_response(mut stream: &TcpStream) {
 /// HOLY CRAP THANK YOU WHOEVER WROTE THIS, TOOK FOREVER TO WORK T_T
 ///
 /// Credits: https://github.com/thepacketgeek/rust-tcpstream-demo/blob/master/raw/src/lib.rs
-pub fn extract_string_buffered(mut buf: &mut impl io::Read) -> io::Result<Vec<u8>> {
+pub fn extract_bytes_buffered(mut buf: &mut impl io::Read) -> io::Result<Vec<u8>> {
     let mut reader = io::BufReader::new(&mut buf);
 
     // `fill_buf` will return a ref to the bytes pending (received by TCP)
