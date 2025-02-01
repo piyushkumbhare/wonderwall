@@ -15,7 +15,7 @@ use server::*;
 mod file_utils;
 mod packet_utils;
 
-/// A horribly written wallpaper engine
+/// A horribly written wallpaper engine with an unreasonably good name
 #[derive(Debug, Parser)]
 #[clap(group(
     ArgGroup::new("action")
