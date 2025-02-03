@@ -173,7 +173,7 @@ impl WallpaperServer {
 
                 // Attempt to set the new directory
                 match file_utils::reload_directory(request.body.trim()) {
-                    Ok(_) => {
+                    Ok(contents) => {
                         // If successful, set the directory and respond with 200
                         *self.directory.lock().unwrap() = request.body.clone();
 
@@ -182,7 +182,17 @@ impl WallpaperServer {
                         );
                         stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
                             log::error!("Failed to write to TCP Stream!");
-                        })
+                        });
+
+                        if let Some(new_first_wallpaper) = contents.first() {
+                            *self.wallpaper.lock().unwrap() = new_first_wallpaper.clone();
+                            let (lock, cvar) = &*self.main_trigger;
+            
+                            let mut trigger = lock.lock().unwrap();
+                            *trigger = true;
+                            cvar.notify_one();
+                            log::info!("Updated wallpaper due to SETDIR request");
+                        }
                     }
                     Err(e) => {
                         // If failed, respond with 400
@@ -191,7 +201,7 @@ impl WallpaperServer {
                         );
                         stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
                             log::error!("Failed to write to TCP Stream!");
-                        })
+                        });
                     }
                 };
             }
