@@ -1,8 +1,4 @@
-#![allow(unused)]
-
 use std::{
-    io::{self, Write},
-    net::TcpStream,
     process::{Command, Stdio},
     time::Duration,
 };
@@ -13,19 +9,28 @@ mod server;
 use server::*;
 
 mod file_utils;
-mod packet_utils;
+mod network_utils;
+
+#[derive(Debug)]
+enum Action {
+    Update(String),
+    Next,
+    GetDir,
+    SetDir(String),
+    Kill,
+}
 
 /// A horribly written wallpaper engine with an unreasonably good name
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone)]
 #[clap(group(
     ArgGroup::new("action")
     .required(true)
-    .args(&["directory", "wallpaper", "next", "get_dir", "set_dir", "kill"])
+    .args(&["directory", "update", "next", "get_dir", "set_dir", "kill"])
 ))]
 struct Args {
     /// The wallpaper to immediately set
     #[arg(short, long)]
-    wallpaper: Option<String>,
+    update: Option<String>,
 
     /// Cycles to the next wallpaper
     #[arg(short, long, default_value_t = false)]
@@ -74,6 +79,24 @@ struct Args {
     duration: u64,
 }
 
+impl Args {
+    fn action(&self) -> Action {
+        if let Some(ref update) = self.update {
+            Action::Update(update.clone())
+        } else if self.next {
+            Action::Next
+        } else if self.get_dir {
+            Action::GetDir
+        } else if let Some(ref dir) = self.set_dir {
+            Action::SetDir(dir.clone())
+        } else if self.kill {
+            Action::Kill
+        } else {
+            unreachable!("Clap ensures one of the actions is always set");
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -84,115 +107,91 @@ fn main() {
             .init();
     }
 
-    if args.directory.is_some() {
-        let directory = args.directory.unwrap();
-
-        match args.run_here {
-            // Starts continuous server. If any error was encountered during setup,
-            // the message will have been logged, so here we can just exit(1);
-            true => {
-                let mut server = WallpaperServer::new(
-                    directory,
-                    args.duration,
-                    format!("{}:{}", args.address, args.port),
-                )
-                .unwrap();
-                match server.start() {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::error!("Server ran into error: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-            false => {
-                // TODO: Find a better way to implement background processes and disowning
-                log::info!("Spawning server child process...");
-                let mut child = Command::new("setsid")
-                    .arg(std::env::args().next().unwrap())
-                    .arg("--start")
-                    .arg(directory)
-                    .arg("--run-here")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null()) // TODO: Redirect child process' stdout and stderr to a log file
-                    .stderr(Stdio::null()) // TODO: For said log file, make a default that can be changed via command line args
-                    .spawn()
-                    .expect("Failed to start server child process");
-
-                // Wait 1 second to see if the child runs into an error (most notably the port being in use already)
-                std::thread::sleep(Duration::from_secs(1));
-                match child.try_wait() {
-                    Ok(status) => match status {
-                        Some(status) => {
-                            if !status.code().is_some_and(|c| c == 0) {
-                                eprintln!("There was a problem starting the server. This usually means the server is already running or the port is in use. Please check the logs to view the problem.")
-                            } else {
-                                eprintln!("The server seems to have exited successfully. Not sure why this happened, but we'll take it.")
-                            }
-                        }
-                        None => {
-                            eprintln!("Server child process (most likely) spawned successfully!")
-                        }
-                    },
-                    Err(e) => {
-                        eprintln!("Ran into unexpected error: {e}");
-                    }
-                }
-            }
-        }
-        std::process::exit(0);
-    }
-
     let address = format!("{}:{}", args.address, args.port);
 
-    if args.wallpaper.is_some() {
-        match packet_utils::send_request("Update", Some(args.wallpaper.clone().unwrap()), &address)
-        {
-            Ok(response) => println!("{response}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+    if args.directory.is_some() {
+        start_server(args);
+    } else {
+        let request_result = match args.action() {
+            Action::Update(wallpaper) => {
+                network_utils::send_request("UPDATE", &wallpaper, &address)
             }
-        }
-    }
+            Action::Next => network_utils::send_request("NEXT", "", &address),
+            Action::GetDir => network_utils::send_request("GETDIR", "", &address),
+            Action::SetDir(directory) => {
+                network_utils::send_request("SETDIR", &directory, &address)
+            }
+            Action::Kill => network_utils::send_request("KILL", "", &address),
+        };
 
-    if args.next {
-        match packet_utils::send_request("Cycle", None, &address) {
-            Ok(response) => println!("{response}"),
+        match request_result {
+            Ok(response) => {
+                log::info!("Received response: {response}");
+                println!("{response}");
+            }
             Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+                log::error!("Ran into error: {e}");
+                eprintln!("{e}");
             }
         }
     }
+}
 
-    if args.get_dir {
-        match packet_utils::send_request("GetDir", None, &address) {
-            Ok(response) => println!("{response}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
+fn start_server(args: Args) {
+    let directory = args.directory.unwrap();
 
-    if args.set_dir.is_some() {
-        match packet_utils::send_request("SetDir", Some(args.set_dir.clone().unwrap()), &address) {
-            Ok(response) => println!("{response}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+    match args.run_here {
+        // Starts continuous server. If any error was encountered during setup,
+        // the message will have been logged, so here we can just exit(1);
+        true => {
+            let mut server = WallpaperServer::new(
+                directory,
+                args.duration,
+                format!("{}:{}", args.address, args.port),
+            )
+            .unwrap();
+            match server.start() {
+                Ok(_) => {}
+                Err(e) => {
+                    log::error!("Server ran into error: {e}");
+                    std::process::exit(1);
+                }
             }
         }
-    }
+        false => {
+            // TODO: Find a better way to implement background processes and disowning
+            log::info!("Spawning server child process...");
+            let mut child = Command::new("setsid")
+                .arg(std::env::args().next().unwrap())
+                .arg("--start")
+                .arg(directory)
+                .arg("--run-here")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null()) // TODO: Redirect child process' stdout and stderr to a log file
+                .stderr(Stdio::null()) // TODO: For said log file, make a default that can be changed via command line args
+                .spawn()
+                .expect("Failed to start server child process");
 
-    if args.kill {
-        match packet_utils::send_request("Stop", None, &address) {
-            Ok(response) => println!("{response}"),
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
+            // Wait 1 second to see if the child runs into an error (most notably the port being in use already)
+            std::thread::sleep(Duration::from_secs(1));
+            match child.try_wait() {
+                Ok(status) => match status {
+                    Some(status) => {
+                        if status.code().is_none_or(|c| c == 0) {
+                            eprintln!("There was a problem starting the server. This usually means the server is already running or the port is in use. Please check the logs to view the problem.")
+                        } else {
+                            eprintln!("The server seems to have exited successfully. Not sure why this happened, but we'll take it.")
+                        }
+                    }
+                    None => {
+                        eprintln!("Server child process (most likely) spawned successfully!")
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Ran into unexpected error: {e}");
+                }
             }
         }
     }
+    std::process::exit(0);
 }
