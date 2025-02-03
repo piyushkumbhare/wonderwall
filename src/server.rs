@@ -187,7 +187,7 @@ impl WallpaperServer {
                         if let Some(new_first_wallpaper) = contents.first() {
                             *self.wallpaper.lock().unwrap() = new_first_wallpaper.clone();
                             let (lock, cvar) = &*self.main_trigger;
-            
+
                             let mut trigger = lock.lock().unwrap();
                             *trigger = true;
                             cvar.notify_one();
