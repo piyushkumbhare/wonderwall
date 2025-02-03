@@ -1,15 +1,13 @@
 use std::{
-    collections::HashMap,
     error::Error,
-    fmt::Display,
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{BufReader, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Condvar, Mutex},
 };
 
 use crate::{
     file_utils,
-    packet_utils::{self, PacketError, ServerError, WallpaperPacket},
+    network_utils::{self, Packet, ServerError},
 };
 
 pub struct WallpaperServer {
@@ -25,7 +23,7 @@ impl WallpaperServer {
     pub fn new(directory: String, duration: u64, address: String) -> Result<Self, Box<dyn Error>> {
         let wallpapers = file_utils::reload_directory(&directory)?;
 
-        let first_wallpaper = wallpapers.get(0).unwrap_or(&String::new()).clone();
+        let first_wallpaper = wallpapers.first().unwrap_or(&String::new()).clone();
 
         Ok(WallpaperServer {
             duration,
@@ -71,7 +69,7 @@ impl WallpaperServer {
 
         // Start listening for requests on the TCP socket!
         for stream in listener.incoming() {
-            let stream = match stream {
+            match stream {
                 Ok(stream) => {
                     self.handle_stream(stream);
                 }
@@ -88,117 +86,134 @@ impl WallpaperServer {
     fn handle_stream(&mut self, mut stream: TcpStream) {
         // Read bytes into the buffer using a reader
         let mut reader = BufReader::new(stream.try_clone().unwrap());
-        let Ok(buffer) = packet_utils::extract_bytes_buffered(&mut reader) else {
+        let Ok(buffer) = network_utils::extract_bytes_buffered(&mut reader) else {
             log::error!("Error while attempting to read from TCP stream");
-            packet_utils::send_empty_response(&stream);
+
+            let response = Packet::new().method("300").body("Internal server error");
+            stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                log::error!("Failed to write to TCP Stream!");
+            });
             return;
         };
+
         log::info!("Request received");
 
-        let packet = match packet_utils::decode_packet(buffer) {
-            Ok(packet) => {
-                log::info!(
-                    "Successfully decoded packet!
-Headers: {:#?}
-Body: {:?}
-                ",
-                    &packet.headers,
-                    &packet.body
-                );
-                packet
-            }
-            Err(e) => {
-                log::warn!("Ran into error while decoding packet: {e}");
-                packet_utils::send_empty_response(&stream);
-                return;
-            }
-        };
+        log::info!("\n`{:?}`", buffer);
+        log::info!("\n`{}`", String::from_utf8(buffer.clone()).unwrap());
 
-        // If the WallpaperControl header is not present, discard packet
-        if !packet.headers.contains_key("WallpaperControl") {
-            log::warn!("Necessary packet header not found.");
-            packet_utils::send_empty_response(&stream);
+        let Ok(request) = Packet::from_bytes(buffer) else {
+            log::error!("Packet has bad format");
+
+            let response = Packet::new().method("400").body("Request has bad format");
+            stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                log::error!("Failed to write to TCP Stream!");
+            });
             return;
-        }
-
-        let (status, response) = match self.process_packet(packet) {
-            Ok((status, body)) => (status, packet_utils::build_response(status, Some(body))),
-            Err(e) => (400, packet_utils::build_response(400, Some(format!("{e}")))),
         };
 
-        log::info!("Replying with packet:\n{response}");
-        match stream.write_all(response.as_bytes()) {
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("Error when attempting to write to TCP stream: {e}");
+        let command = match request.headers.get("WallpaperControl") {
+            Some(command) => command,
+            None => {
+                log::error!("Packet is missing required headers");
+
+                let response = Packet::new().method("400").body("Missing required headers");
+                stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                    log::error!("Failed to write to TCP Stream!");
+                });
                 return;
             }
-        }
-
-        // I hereby declare that HTTP status code 269 means the connection was successfully closed
-        if status == 269 {
-            std::process::exit(0);
-        }
-    }
-
-    /// Processes a decoded packet's request.
-    fn process_packet<'a>(
-        &mut self,
-        packet: WallpaperPacket,
-    ) -> Result<(u64, String), Box<dyn Error + '_>> {
-        let command = packet.headers["WallpaperControl"].clone();
-        let response: (u64, String) = match command.as_str() {
-            "Update" => {
-                log::info!("Received Update request");
-                *self.wallpaper.lock().unwrap() = packet.body;
-                let (lock, cvar) = &*self.main_trigger;
-
-                let mut trigger = lock.lock().unwrap();
-                *trigger = true;
-                cvar.notify_one();
-
-                (200, "OK".to_string())
-            }
-            "Cycle" => {
-                log::info!("Received Cycle request");
-                let (lock, cvar) = &*self.main_trigger;
-
-                let mut trigger = lock.lock().unwrap();
-                *trigger = true;
-                cvar.notify_one();
-
-                (200, "OK".to_string())
-            }
-            "Stop" => {
-                log::info!("Received Stop request, closing server...");
-                (269, "Stopping server...".to_string())
-            }
-            "GetDir" => {
-                log::info!("Received GetDir request");
-                (200, self.directory.lock().unwrap().clone())
-            }
-            "SetDir" => {
-                log::info!("Received SetDir request");
-
-                match file_utils::reload_directory(&packet.body.trim()) {
-                    Ok(_) => {
-                        *self.directory.lock().unwrap() = packet.body;
-                        (200, "OK".to_string())
-                    }
-                    Err(e) => (
-                        400,
-                        format!("ERROR: The directory provided could not be set: {e}"),
-                    ),
-                }
-            }
-            _ => {
-                return Err(Box::new(PacketError(
-                    "Received unknown request, discarding packet...",
-                )))
-            }
         };
 
-        Ok(response)
+        // Handle Wallpaper command
+        match command.to_uppercase().as_str() {
+            "UPDATE" => {
+                log::info!("Received request: UPDATE");
+                *self.wallpaper.lock().unwrap() = request.body.clone();
+                let (lock, cvar) = &*self.main_trigger;
+
+                let mut trigger = lock.lock().unwrap();
+                *trigger = true;
+                cvar.notify_one();
+
+                let response = Packet::new()
+                    .method("200")
+                    .body(format!("Updated wallpaper to {}", request.body).as_str());
+
+                stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                    log::error!("Failed to write to TCP Stream!");
+                });
+            }
+            "NEXT" => {
+                log::info!("Received request: NEXT");
+                let (lock, cvar) = &*self.main_trigger;
+                let next_wallpaper = self.wallpaper.lock().unwrap().clone();
+
+                let mut trigger = lock.lock().unwrap();
+                *trigger = true;
+                cvar.notify_one();
+
+                let response = Packet::new()
+                    .method("200")
+                    .body(format!("Cycled wallpaper to {}", next_wallpaper).as_str());
+                stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                    log::error!("Failed to write to TCP Stream!");
+                });
+            }
+            "GETDIR" => {
+                log::info!("Received request: GETDIR");
+
+                let cur_dir = self.directory.lock().unwrap().clone();
+                let response = Packet::new().method("200").body(&cur_dir);
+                stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                    log::error!("Failed to write to TCP Stream!");
+                });
+            }
+            "SETDIR" => {
+                log::info!("Received request: SETDIR");
+
+                // Attempt to set the new directory
+                match file_utils::reload_directory(request.body.trim()) {
+                    Ok(_) => {
+                        // If successful, set the directory and respond with 200
+                        *self.directory.lock().unwrap() = request.body.clone();
+
+                        let response = Packet::new().method("200").body(
+                            format!("Wonderwall will now cycle through {}", request.body).as_str(),
+                        );
+                        stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                            log::error!("Failed to write to TCP Stream!");
+                        })
+                    }
+                    Err(e) => {
+                        // If failed, respond with 400
+                        let response = Packet::new().method("400").body(
+                            format!("There was an error setting the directory: {e}").as_str(),
+                        );
+                        stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                            log::error!("Failed to write to TCP Stream!");
+                        })
+                    }
+                };
+            }
+            "KILL" => {
+                log::info!("Received request: KILL");
+
+                let response = Packet::new().method("200").body("Stopping server...");
+                stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                    log::error!("Failed to write to TCP Stream!");
+                });
+
+                std::process::exit(0);
+            }
+            r => {
+                log::warn!("Received invalid request: {r}");
+
+                let response = Packet::new().method("400").body("Invalid request!");
+                stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
+                    log::error!("Failed to write to TCP Stream!");
+                })
+            }
+        }
     }
 }
 
@@ -215,7 +230,7 @@ fn cycle_wallpapers(
     let (lock, cvar) = &**child_trigger;
 
     // Wait for trigger or timeout
-    let mut triggered = lock.lock().unwrap();
+    let triggered = lock.lock().unwrap();
     let _ = cvar.wait_timeout(triggered, std::time::Duration::from_secs(duration));
 
     // Read next wallpaper
@@ -228,7 +243,7 @@ fn cycle_wallpapers(
     log::info!("Reloaded directory");
 
     // If the wallpaper's directory is empty, we should return an error and leave the index unchanged
-    if wallpapers.len() == 0 {
+    if wallpapers.is_empty() {
         return Err(Box::new(ServerError("Wallpaper directory is empty!")));
     }
 
@@ -238,7 +253,7 @@ fn cycle_wallpapers(
         *index += 1;
     }
 
-    *index = *index % wallpapers.len();
+    *index %= wallpapers.len();
 
     // Queue the next wallpaper
     let mut next_wallpaper = child_wallpaper.lock().unwrap();
@@ -247,7 +262,7 @@ fn cycle_wallpapers(
     log::info!("Queued wallpaper: {}", next_wallpaper);
 
     // Change wallpaper
-    if current_wallpaper.len() > 0 {
+    if !current_wallpaper.is_empty() {
         log::info!("Setting wallpaper: {}", &current_wallpaper);
         file_utils::hyprpaper_update(&current_wallpaper)?;
     }
