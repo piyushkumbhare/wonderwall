@@ -36,11 +36,10 @@ Options:
   -s, --set-dir <SET_DIR>      Sets the directory the engine should cycle through
       --start <DIRECTORY>      Start the Wallpaper server in the background
   -r, --run-here               Runs the Wallpaper server in the current terminal
-  -k, --kill                   
+  -k, --kill
   -a, --addr <ADDRESS>         Sets the address of the server [default: 127.0.0.1]
   -p, --port <PORT>            Sets the port of the server [default: 6969]
   -v, --verbose                Show all logs
   -d, --duration <DURATION>    Time (in seconds) between wallpaper switches [default: 300]
   -h, --help                   Print help
 ```
-
