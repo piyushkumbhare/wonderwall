@@ -1,5 +1,5 @@
 # Wonderwall
-This is a horrible wallpaper engine... but the name is wonderful (credits to LasagnaLord)
+This is an alright wallpaper engine... but the name is wonderful (credits to LasagnaLord)
 
 ## Installation
 
@@ -25,21 +25,22 @@ mv target/release/wonderwall ~/bin/
 ```
 $ wonderwall --help
 
-A horribly written wallpaper engine with an unreasonably good name
+An... okay wallpaper engine with an unreasonably good name
 
-Usage: wonderwall [OPTIONS] <--start <DIRECTORY>|--wallpaper <WALLPAPER>|--next|--get-dir|--set-dir <SET_DIR>|--kill>
+Usage: wonderwall [OPTIONS] <COMMAND>
+
+Commands:
+  start    Start the wallpaper server at a specified directory
+  update   Manually update the wallpaper with a provided path
+  next     Cycle to the next wallpaper in the queue
+  get-dir  Print out the current wallpaper directory
+  set-dir  Set the directory to cycle through
+  ping     Ping the wallpaper server
+  kill     Stop the wallpaper server
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
-  -w, --wallpaper <WALLPAPER>  The wallpaper to immediately set
-  -n, --next                   Cycles to the next wallpaper
-  -g, --get-dir                Gets the directory the engine is currently cycling through
-  -s, --set-dir <SET_DIR>      Sets the directory the engine should cycle through
-      --start <DIRECTORY>      Start the Wallpaper server in the background
-  -r, --run-here               Runs the Wallpaper server in the current terminal
-  -k, --kill
-  -a, --addr <ADDRESS>         Sets the address of the server [default: 127.0.0.1]
-  -p, --port <PORT>            Sets the port of the server [default: 6969]
-  -v, --verbose                Show all logs
-  -d, --duration <DURATION>    Time (in seconds) between wallpaper switches [default: 300]
-  -h, --help                   Print help
+  -v, --verbose  Show log info
+  -h, --help     Print help
+
 ```
