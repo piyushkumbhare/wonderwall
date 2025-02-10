@@ -1,103 +1,21 @@
-use std::{
-    process::{Command, Stdio},
-    time::Duration,
-};
+use std::error::Error;
 
-use clap::{ArgGroup, Parser};
+use clap::Parser;
 
-mod server;
-use server::*;
+// Can Rust PLEASE add a way to bundle `mod` statements
+mod args;
+mod constants;
+mod utils;
+mod wpserver;
 
-mod file_utils;
-mod network_utils;
+use args::*;
+use constants::*;
+use utils::socket_utils;
+use wpserver::server::WallpaperServer;
 
-#[derive(Debug)]
-enum Action {
-    Update(String),
-    Next,
-    GetDir,
-    SetDir(String),
-    Kill,
-}
-
-/// A horribly written wallpaper engine with an unreasonably good name
-#[derive(Debug, Parser, Clone)]
-#[clap(group(
-    ArgGroup::new("action")
-    .required(true)
-    .args(&["directory", "update", "next", "get_dir", "set_dir", "kill"])
-))]
-struct Args {
-    /// The wallpaper to immediately set
-    #[arg(short, long)]
-    update: Option<String>,
-
-    /// Cycles to the next wallpaper
-    #[arg(short, long, default_value_t = false)]
-    next: bool,
-
-    /// Gets the directory the engine is currently cycling through
-    #[arg(short, long = "get-dir")]
-    get_dir: bool,
-
-    /// Sets the directory the engine should cycle through
-    #[arg(short, long = "set-dir")]
-    set_dir: Option<String>,
-
-    /// Start the Wallpaper server in the background
-    #[arg(long = "start")]
-    directory: Option<String>,
-
-    /// Runs the Wallpaper server in the current terminal
-    #[arg(
-        requires = "directory",
-        short,
-        long = "run-here",
-        default_value_t = false
-    )]
-    run_here: bool,
-
-    // Kills the currently running server
-    #[arg(short, long, default_value_t = false)]
-    kill: bool,
-
-    /* DEFAULT VALUE GLOBAL PARAMETERS */
-    /// Sets the address of the server
-    #[arg(short, long = "addr", default_value_t = String::from("127.0.0.1"))]
-    address: String,
-
-    /// Sets the port of the server
-    #[arg(short, long = "port", default_value_t = 6969)]
-    port: u64,
-
-    /// Show all logs
-    #[arg(short, long, default_value_t = false)]
-    verbose: bool,
-
-    /// Time (in seconds) between wallpaper switches
-    #[arg(short, long, default_value_t = 300)]
-    duration: u64,
-}
-
-impl Args {
-    fn action(&self) -> Action {
-        if let Some(ref update) = self.update {
-            Action::Update(update.clone())
-        } else if self.next {
-            Action::Next
-        } else if self.get_dir {
-            Action::GetDir
-        } else if let Some(ref dir) = self.set_dir {
-            Action::SetDir(dir.clone())
-        } else if self.kill {
-            Action::Kill
-        } else {
-            unreachable!("Clap ensures one of the actions is always set");
-        }
-    }
-}
-
-fn main() {
+// TODO: See if there's a better way to return out of main... I don't like unnecessarily using Box<dyn Error>.
+// Also for some reason, anyhow::Result<()> won't work with nix::unistd::daemon()'s Error variant
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
     // Enable logging if verbose
@@ -107,91 +25,65 @@ fn main() {
             .init();
     }
 
-    let address = format!("{}:{}", args.address, args.port);
-
-    if args.directory.is_some() {
-        start_server(args);
-    } else {
-        let request_result = match args.action() {
-            Action::Update(wallpaper) => {
-                network_utils::send_request("UPDATE", &wallpaper, &address)
-            }
-            Action::Next => network_utils::send_request("NEXT", "", &address),
-            Action::GetDir => network_utils::send_request("GETDIR", "", &address),
-            Action::SetDir(directory) => {
-                network_utils::send_request("SETDIR", &directory, &address)
-            }
-            Action::Kill => network_utils::send_request("KILL", "", &address),
-        };
-
-        match request_result {
-            Ok(response) => {
-                log::info!("Received response: {response}");
-                println!("{response}");
-            }
-            Err(e) => {
-                log::error!("Ran into error: {e}");
-                eprintln!("{e}");
-            }
-        }
-    }
-}
-
-fn start_server(args: Args) {
-    let directory = args.directory.unwrap();
-
-    match args.run_here {
-        // Starts continuous server. If any error was encountered during setup,
-        // the message will have been logged, so here we can just exit(1);
-        true => {
-            let mut server = WallpaperServer::new(
-                directory,
-                args.duration,
-                format!("{}:{}", args.address, args.port),
-            )
-            .unwrap();
-            match server.start() {
-                Ok(_) => {}
+    // Parse subcommand
+    use Opt::*;
+    match args.command {
+        Start {
+            directory,
+            duration,
+            run_here,
+        } => {
+            let mut server = match WallpaperServer::new(directory, duration, FILE_SOCKET) {
+                Ok(s) => s,
                 Err(e) => {
-                    log::error!("Server ran into error: {e}");
+                    log::error!("Ran into error while creating server: {e}");
+                    eprintln!("Ran into error while creating server {e}");
                     std::process::exit(1);
                 }
-            }
-        }
-        false => {
-            // TODO: Find a better way to implement background processes and disowning
-            log::info!("Spawning server child process...");
-            let mut child = Command::new("setsid")
-                .arg(std::env::args().next().unwrap())
-                .arg("--start")
-                .arg(directory)
-                .arg("--run-here")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null()) // TODO: Redirect child process' stdout and stderr to a log file
-                .stderr(Stdio::null()) // TODO: For said log file, make a default that can be changed via command line args
-                .spawn()
-                .expect("Failed to start server child process");
+            };
 
-            // Wait 1 second to see if the child runs into an error (most notably the port being in use already)
-            std::thread::sleep(Duration::from_secs(1));
-            match child.try_wait() {
-                Ok(status) => match status {
-                    Some(status) => {
-                        if status.code().is_none_or(|c| c == 0) {
-                            eprintln!("There was a problem starting the server. This usually means the server is already running or the port is in use. Please check the logs to view the problem.")
-                        } else {
-                            eprintln!("The server seems to have exited successfully. Not sure why this happened, but we'll take it.")
-                        }
-                    }
-                    None => {
-                        eprintln!("Server child process (most likely) spawned successfully!")
-                    }
-                },
+            // If not running in the current terminal, attempt to detatch
+            if !run_here {
+                log::warn!("Attempting to detatch from parent terminal... (You won't get a message if it was successful btw lol)");
+                if let Err(e) = nix::unistd::daemon(false, false) {
+                    log::error!("Error while trying to daemonize: {e}");
+                    return Err(Box::new(e));
+                };
+                log::info!("Server is now a fully realized daemon. Yay! >:)");
+            } else {
+                log::info!("Running server in current terminal!");
+            }
+
+            // Attempt to run the server. This block will only ever return if an error occurs or if the server is manually shut down
+            match server.run() {
+                Ok(_) => log::info!("Server stopped successfully!"),
                 Err(e) => {
-                    eprintln!("Ran into unexpected error: {e}");
+                    log::error!("Ran into error while running server: {e}");
+                    eprintln!("Ran into error while running server: {e}");
+                    return Err(e);
                 }
             }
         }
+        command => {
+            // Parse the command and send the appropriate request
+            let request_result = match command {
+                Update { path } => socket_utils::send_request("UPDATE", &path, FILE_SOCKET),
+                Next => socket_utils::send_request("NEXT", "", FILE_SOCKET),
+                GetDir => socket_utils::send_request("GETDIR", "", FILE_SOCKET),
+                SetDir { directory } => {
+                    socket_utils::send_request("SETDIR", &directory, FILE_SOCKET)
+                }
+                Ping => socket_utils::send_request("PING", "", FILE_SOCKET),
+                Kill => socket_utils::send_request("KILL", "", FILE_SOCKET),
+                _ => unreachable!(), // Won't be reached since we already matched all possible subcommands
+            };
+
+            // Get the response/error and print it to the screen
+            match request_result {
+                Ok(response) => println!("{response}"),
+                Err(e) => eprintln!("Ran into error while sending request: {e}"),
+            }
+        }
     }
-    std::process::exit(0);
+    Ok(())
 }

@@ -38,6 +38,7 @@ pub fn hyprpaper_update(path: &str) -> Result<(), Box<dyn Error>> {
 }
 
 pub fn exec_command(command: &str) -> io::Result<String> {
+    log::info!("Executing command: `{}`", &command);
     let output = std::process::Command::new("bash")
         .arg("-c")
         .arg(command)
