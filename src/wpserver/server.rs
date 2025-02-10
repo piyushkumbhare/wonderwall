@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    constants,
+    constants::*,
     utils::{socket_utils::Packet, *},
 };
 
@@ -23,7 +23,7 @@ pub struct WallpaperServer {
 impl Drop for WallpaperServer {
     fn drop(&mut self) {
         log::info!("Removing file {}", &self.socket);
-        let _ = std::fs::remove_file(&self.socket);
+        std::fs::remove_file(&self.socket).expect("Failed to remove socket file.");
     }
 }
 
@@ -67,7 +67,7 @@ impl WallpaperServer {
     /// If the server is terminated with a `Stop` via File socket, this function will return `Ok(())`.
     ///
     /// If the server encounters a critical error, it will quit and propagate it by returning an `Err(_)`.
-    pub fn start(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         // Set up Atomic Mutexes for the child thread to use
         let child_trigger = self.main_trigger.clone();
         let child_wallpaper = self.wallpaper.clone();
@@ -87,6 +87,7 @@ impl WallpaperServer {
                 Ok(_) => {}
                 Err(e) => {
                     log::error!("Ran into error: {e}");
+                    std::fs::remove_file(FILE_SOCKET).expect("Failed to remove socket file.");
                     std::process::exit(1);
                 }
             }
@@ -128,9 +129,10 @@ impl WallpaperServer {
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let Ok(buffer) = socket_utils::extract_bytes_buffered(&mut reader) else {
             let response = Packet::new().method("300").body("Internal server error");
-            stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
-                log::error!("Failed to write to File Socket Stream!");
-            });
+            stream
+                .write_all(&response.as_bytes())
+                .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
+
             return Err(ServerError::RequestError(
                 "Error while attempting to read from File Socket stream",
             ));
@@ -143,9 +145,10 @@ impl WallpaperServer {
 
         let Ok(request) = Packet::from_bytes(buffer) else {
             let response = Packet::new().method("400").body("Request has bad format");
-            stream.write_all(&response.as_bytes()).unwrap_or_else(|_| {
-                log::error!("Failed to write to File Socket Stream!");
-            });
+            stream
+                .write_all(&response.as_bytes())
+                .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
+
             return Err(ServerError::RequestError("Packet has bad format"));
         };
 
@@ -155,7 +158,7 @@ impl WallpaperServer {
                 let response = Packet::new().method("400").body("Missing required headers");
                 stream
                     .write_all(&response.as_bytes())
-                    .map_err(|_| ServerError::SocketError(constants::SOCKET_WRITE_ERROR))?;
+                    .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
 
                 return Err(ServerError::RequestError(
                     "Packet is missing required headers",
@@ -170,13 +173,14 @@ impl WallpaperServer {
             "GETDIR" => self.get_dir(&mut stream)?,
             "SETDIR" => self.set_dir(&mut stream, request.body)?,
             "KILL" => self.kill(&mut stream)?,
+            "PING" => self.ping(&mut stream)?,
             invalid_request => {
                 log::warn!("Received invalid request: {invalid_request}");
 
                 let response = Packet::new().method("400").body("Invalid request!");
                 stream
                     .write_all(&response.as_bytes())
-                    .map_err(|_| ServerError::SocketError(constants::SOCKET_WRITE_ERROR))?;
+                    .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
             }
         }
         Ok(())

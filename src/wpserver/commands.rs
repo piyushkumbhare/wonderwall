@@ -68,6 +68,7 @@ impl WallpaperServer {
                 let response = Packet::new()
                     .method("200")
                     .body(format!("Wonderwall will now cycle through {}", value).as_str());
+
                 stream
                     .write_all(&response.as_bytes())
                     .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
@@ -102,13 +103,18 @@ impl WallpaperServer {
 
         stream
             .write_all(&response.as_bytes())
-            .map_err(|_| ServerError::SocketError("Failed to write to File Socket Stream!"))?;
+            .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
 
         Err(ServerError::Kill)
     }
 
     #[allow(unused)]
     pub fn ping(&mut self, stream: &mut UnixStream) -> Result<(), ServerError> {
-        todo!()
+        log::info!("Received request: PING");
+
+        let response = Packet::new().method("200").body("pong");
+        stream
+            .write_all(&response.as_bytes())
+            .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))
     }
 }
