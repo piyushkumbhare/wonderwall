@@ -36,20 +36,16 @@ impl WallpaperServer {
 
         // Initialize File Listener
         if Path::new(&socket).exists() {
-            match UnixListener::bind(socket) {
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                    return Err(Box::new(ServerError::RequestError(
-                        "Socket seems to be in use",
-                    )));
-                }
-                Err(e) => {
-                    log::error!("{e}");
-                    std::fs::remove_file(socket)?;
-                    return Err(Box::new(ServerError::RequestError(
-                        "Removed socket file because unable to connect. Try again.",
-                    )));
-                }
+            if socket_utils::send_request("PING", "", socket)
+                .is_ok_and(|response| response.trim() == "pong")
+            {
+                log::error!("Server is alraedy running on socket!");
+                return Err(Box::new(ServerError::SocketError(
+                    "Server is already running on socket!",
+                )));
+            } else {
+                log::warn!("Socket file was detected, but server did not respond to ping. Deleting socket and starting server...");
+                std::fs::remove_file(socket).unwrap();
             }
         }
 
@@ -62,9 +58,9 @@ impl WallpaperServer {
         })
     }
 
-    /// Starts the Wallpaper File server.
+    /// Starts the Wallpaper socket server.
     ///
-    /// If the server is terminated with a `Stop` via File socket, this function will return `Ok(())`.
+    /// If the server is terminated with a `Stop` via Unix Socket request, this function will return `Ok(())`.
     ///
     /// If the server encounters a critical error, it will quit and propagate it by returning an `Err(_)`.
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
@@ -74,6 +70,9 @@ impl WallpaperServer {
         let child_directory = self.directory.clone();
         let mut index = 0;
         let duration = self.duration;
+
+        // TODO: Look for better ways to do this... I don't like how an entirely new function is needed just because `&self.<anything>``
+        // causes borrow-checker errors due to `self` being moved
 
         // Spawn the child thread. This thread will be responsible for cycling the wallpaper every DURATION seconds
         std::thread::spawn(move || loop {
@@ -106,6 +105,7 @@ impl WallpaperServer {
                         match error_type {
                             ServerError::Kill => {
                                 log::warn!("Stopping server...");
+                                // Break out of the socket listener loop so we can exit gracefully through `main()`
                                 break;
                             }
                             e => {
