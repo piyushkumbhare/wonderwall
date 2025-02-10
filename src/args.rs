@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 pub enum Opt {
     /// Start the wallpaper server at a specified directory
     Start {
+        /// Directory containing wallpapers to cycle through
         directory: String,
 
         /// Time (in seconds) between automatic wallpaper updates
@@ -16,7 +17,10 @@ pub enum Opt {
     },
 
     /// Manually update the wallpaper with a provided path
-    Update { path: String },
+    Update {
+        /// Path to wallpaper
+        path: String,
+    },
 
     /// Cycle to the next wallpaper in the queue
     Next,
@@ -25,7 +29,10 @@ pub enum Opt {
     GetDir,
 
     /// Set the directory to cycle through
-    SetDir { directory: String },
+    SetDir {
+        /// Directory containing wallpapers to cycle through
+        directory: String,
+    },
 
     /// Ping the wallpaper server
     Ping,

@@ -28,6 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Parse subcommand
     use Opt::*;
     match args.command {
+        // Starts the server with the specified parameters
         Start {
             directory,
             duration,
