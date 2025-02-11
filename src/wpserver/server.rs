@@ -34,16 +34,18 @@ impl WallpaperServer {
         let wallpapers = file_utils::get_directory_files(&directory)?;
         let first_wallpaper = wallpapers.first().unwrap_or(&String::new()).clone();
 
-        // Initialize File Listener
+        // If the path exists, try pinging the server
         if Path::new(&socket).exists() {
             if socket_utils::send_request("PING", "", socket)
                 .is_ok_and(|response| response.trim() == "pong")
             {
+                // If the server responds, it means its running, so we back off
                 log::error!("Server is alraedy running on socket!");
                 return Err(Box::new(ServerError::SocketError(
                     "Server is already running on socket!",
                 )));
             } else {
+                // If the server did not respond, it was most likely improperly terminated, so we take over
                 log::warn!("Socket file was detected, but server did not respond to ping. Deleting socket and starting server...");
                 std::fs::remove_file(socket).unwrap();
             }
@@ -92,10 +94,10 @@ impl WallpaperServer {
             }
         });
 
+        let listener = UnixListener::bind(&self.socket)?;
+
         log::info!("Starting server at {}", &self.socket);
         log::info!("Wallpaper will cycle every {} seconds", &self.duration);
-
-        let listener = UnixListener::bind(&self.socket)?;
 
         // Start listening for requests on the File socket!
         for stream in listener.incoming() {
@@ -123,11 +125,12 @@ impl WallpaperServer {
         Ok(())
     }
 
-    /// Reads the raw request from File bytestream, decodes the packet, and submits the request to be processed.
+    /// Reads the raw request from socket bytestream, decodes the packet, and submits the request to be processed.
     fn handle_stream(&mut self, mut stream: UnixStream) -> Result<(), ServerError> {
         // Read bytes into the buffer using a reader
         let mut reader = BufReader::new(stream.try_clone().unwrap());
         let Ok(buffer) = socket_utils::extract_bytes_buffered(&mut reader) else {
+            // Reading bytes is an internal error
             let response = Packet::new().method("300").body("Internal server error");
             stream
                 .write_all(&response.as_bytes())
@@ -144,6 +147,7 @@ impl WallpaperServer {
         );
 
         let Ok(request) = Packet::from_bytes(buffer) else {
+            // Bad packet format is a user error
             let response = Packet::new().method("400").body("Request has bad format");
             stream
                 .write_all(&response.as_bytes())
@@ -155,6 +159,7 @@ impl WallpaperServer {
         let command = match request.headers.get("WallpaperControl") {
             Some(command) => command,
             None => {
+                // Bad packet format is a user error
                 let response = Packet::new().method("400").body("Missing required headers");
                 stream
                     .write_all(&response.as_bytes())
@@ -177,6 +182,7 @@ impl WallpaperServer {
             invalid_request => {
                 log::warn!("Received invalid request: {invalid_request}");
 
+                // Invalid request is a user error
                 let response = Packet::new().method("400").body("Invalid request!");
                 stream
                     .write_all(&response.as_bytes())
@@ -241,6 +247,8 @@ fn cycle_wallpapers(
     Ok(())
 }
 
+// Server Error implementations
+
 #[derive(Debug)]
 pub enum ServerError<'a> {
     Kill,
@@ -253,9 +261,9 @@ impl Display for ServerError<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServerError::Kill => f.write_str("Killed"),
-            ServerError::RequestError(msg) => f.write_fmt(format_args!("{msg}")),
-            ServerError::SocketError(msg) => f.write_fmt(format_args!("{msg}")),
-            ServerError::FileError(msg) => f.write_fmt(format_args!("{msg}")),
+            ServerError::RequestError(msg) => f.write_str(msg),
+            ServerError::SocketError(msg) => f.write_str(msg),
+            ServerError::FileError(msg) => f.write_str(msg),
         }
     }
 }

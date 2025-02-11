@@ -7,10 +7,6 @@ pub enum Opt {
         /// Directory containing wallpapers to cycle through
         directory: String,
 
-        /// Pring logs
-        #[arg(short, long, default_value_t = false)]
-        verbose: bool,
-
         /// Redirect log output to log file
         #[arg(short = 'o', long)]
         log: Option<String>,
@@ -20,8 +16,8 @@ pub enum Opt {
         duration: u64,
 
         /// Runs the wallpaper server in the current terminal (useful for debugging)
-        #[arg(short, long = "run-here", default_value_t = false)]
-        run_here: bool,
+        #[arg(short, long = "foreground", default_value_t = false)]
+        fg: bool,
     },
 
     /// Manually update the wallpaper with a provided path
