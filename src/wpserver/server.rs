@@ -13,7 +13,7 @@ use crate::{
 };
 
 pub struct WallpaperServer {
-    pub directory: Arc<Mutex<String>>,
+    pub directory: Arc<Mutex<String>>, // TODO: Add a flatten feature that recursively unfolds all subdirectories
     pub wallpaper: Arc<Mutex<String>>,
     pub main_trigger: Arc<(Mutex<bool>, Condvar)>,
     pub duration: u64,
@@ -22,7 +22,7 @@ pub struct WallpaperServer {
 
 impl Drop for WallpaperServer {
     fn drop(&mut self) {
-        log::info!("Removing file {}", &self.socket);
+        log::warn!("Removing file {}", &self.socket);
         std::fs::remove_file(&self.socket).expect("Failed to remove socket file.");
     }
 }
@@ -30,8 +30,8 @@ impl Drop for WallpaperServer {
 impl WallpaperServer {
     /// Initializes a `WallpaperServer` instance with a backgrounds directory. The server can then be started with `.start()`
     pub fn new(directory: String, duration: u64, socket: &str) -> Result<Self, Box<dyn Error>> {
-        let wallpapers = file_utils::reload_directory(&directory)?;
-
+        // FIXME: What the fuck is this... please load the first wallpaper to the screen and queue the SECOND one
+        let wallpapers = file_utils::get_directory_files(&directory)?;
         let first_wallpaper = wallpapers.first().unwrap_or(&String::new()).clone();
 
         // Initialize File Listener
@@ -209,7 +209,7 @@ fn cycle_wallpapers(
     // Reload directory
     let directory = child_directory.lock().unwrap().clone();
 
-    let wallpapers = file_utils::reload_directory(&directory)?;
+    let wallpapers = file_utils::get_directory_files(&directory)?;
     log::info!("Reloaded directory");
 
     // If the wallpaper's directory is empty, we should return an error and leave the index unchanged

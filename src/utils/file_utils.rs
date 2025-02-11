@@ -47,16 +47,29 @@ pub fn exec_command(command: &str) -> io::Result<String> {
     Ok(output.stdout.iter().map(|&c| char::from(c)).collect())
 }
 
-pub fn reload_directory(path: &str) -> io::Result<Vec<String>> {
+pub fn get_directory_files(path: &str) -> io::Result<Vec<String>> {
     let path = PathBuf::from(path).canonicalize()?;
 
-    Ok(std::fs::read_dir(&path)?
+    let mut contents: Vec<_> = std::fs::read_dir(&path)?
         .filter_map(|e| e.ok())
         .filter_map(|e| {
-            e.file_type()
-                .ok()?
-                .is_file()
-                .then(|| e.path().to_str().map(|s| s.to_string()))?
+            let file_type = e.file_type().ok()?;
+            let is_file = file_type.is_file();
+            let path_str = e.path().to_str().map(|s| s.to_string());
+
+            // Log each entry's attributes
+            log::debug!(
+                "Found entry: {:?}, is_file: {}, path: {:?}",
+                e.file_name(),
+                is_file,
+                path_str
+            );
+
+            is_file.then_some(path_str)?
         })
-        .collect())
+        .collect();
+
+    contents.sort();
+
+    Ok(contents)
 }

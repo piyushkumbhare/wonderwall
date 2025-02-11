@@ -7,6 +7,14 @@ pub enum Opt {
         /// Directory containing wallpapers to cycle through
         directory: String,
 
+        /// Pring logs
+        #[arg(short, long, default_value_t = false)]
+        verbose: bool,
+
+        /// Redirect log output to log file
+        #[arg(short = 'o', long)]
+        log: Option<String>,
+
         /// Time (in seconds) between automatic wallpaper updates
         #[arg(short, long, default_value_t = 600)]
         duration: u64,
@@ -46,8 +54,4 @@ pub enum Opt {
 pub struct Args {
     #[command(subcommand)]
     pub command: Opt,
-
-    /// Show log info
-    #[arg(short, long, default_value_t = false)]
-    pub verbose: bool,
 }

@@ -10,6 +10,7 @@ mod wpserver;
 
 use args::*;
 use constants::*;
+use fern::Dispatch;
 use utils::socket_utils;
 use wpserver::server::WallpaperServer;
 
@@ -17,13 +18,6 @@ use wpserver::server::WallpaperServer;
 // Also for some reason, anyhow::Result<()> won't work with nix::unistd::daemon()'s Error variant
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-
-    // Enable logging if verbose
-    if args.verbose {
-        env_logger::Builder::new()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-    }
 
     // Parse subcommand
     use Opt::*;
@@ -33,19 +27,29 @@ fn main() -> Result<(), Box<dyn Error>> {
             directory,
             duration,
             run_here,
+            verbose,
+            log,
         } => {
+            if verbose {
+                match log {
+                    Some(log_file) => setup_logger().chain(fern::log_file(log_file)?),
+                    None => setup_logger(),
+                }
+                .apply()?;
+            }
+
             let mut server = match WallpaperServer::new(directory, duration, FILE_SOCKET) {
                 Ok(s) => s,
                 Err(e) => {
                     log::error!("Ran into error while creating server: {e}");
                     eprintln!("Ran into error while creating server {e}");
-                    std::process::exit(1);
+                    return Err(e);
                 }
             };
 
             // If not running in the current terminal, attempt to detatch
             if !run_here {
-                log::warn!("Attempting to detatch from parent terminal... (You won't get a message if it was successful btw lol)");
+                log::warn!("Attempting to detatch from parent terminal...");
                 if let Err(e) = nix::unistd::daemon(false, false) {
                     log::error!("Error while trying to daemonize: {e}");
                     return Err(Box::new(e));
@@ -87,4 +91,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+fn setup_logger() -> Dispatch {
+    let colors = fern::colors::ColoredLevelConfig::default().info(fern::colors::Color::Green);
+    fern::Dispatch::new()
+        .format(move |out, message, record| {
+            out.finish(format_args!(
+                "[{} {} {}] {}",
+                humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
+                colors.color(record.level()),
+                record.target(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Debug)
+        .chain(std::io::stderr())
 }
