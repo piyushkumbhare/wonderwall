@@ -60,7 +60,7 @@ impl WallpaperServer {
         log::info!("Received request: SETDIR");
 
         // Attempt to set the new directory
-        match file_utils::reload_directory(value.trim()) {
+        match file_utils::get_directory_files(value.trim()) {
             Ok(contents) => {
                 // If successful, set the directory and respond with 200
                 *self.directory.lock().unwrap() = value.clone();
