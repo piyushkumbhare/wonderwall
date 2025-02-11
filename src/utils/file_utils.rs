@@ -57,14 +57,16 @@ pub fn get_directory_files(path: &str) -> io::Result<Vec<String>> {
             let is_file = file_type.is_file();
             let path_str = e.path().to_str().map(|s| s.to_string());
 
-            // Log each entry's attributes
-            log::debug!(
-                "Found entry: {:?}, is_file: {}, path: {:?}",
-                e.file_name(),
-                is_file,
-                path_str
-            );
-
+            // Log each entry's attributes if on debug mode
+            #[cfg(debug_assertions)]
+            {
+                log::debug!(
+                    "Found entry: {:?}, is_file: {}, path: {:?}",
+                    e.file_name(),
+                    is_file,
+                    path_str
+                );
+            }
             is_file.then_some(path_str)?
         })
         .collect();

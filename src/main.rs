@@ -26,17 +26,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         Start {
             directory,
             duration,
-            run_here,
-            verbose,
+            fg: run_here,
             log,
         } => {
-            if verbose {
-                match log {
-                    Some(log_file) => setup_logger().chain(fern::log_file(log_file)?),
-                    None => setup_logger(),
-                }
-                .apply()?;
+            let logger = setup_logger();
+            if let Some(log_file) = log {
+                logger.chain(fern::log_file(log_file)?)
+            } else {
+                logger
             }
+            .apply()?;
 
             let mut server = match WallpaperServer::new(directory, duration, FILE_SOCKET) {
                 Ok(s) => s,
@@ -86,17 +85,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             // Get the response/error and print it to the screen
             match request_result {
                 Ok(response) => println!("{response}"),
-                Err(e) => eprintln!("Ran into error while sending request: {e}"),
+                Err(e) => {
+                    eprintln!("Ran into error while sending request: {e}\nIs the server running?")
+                }
             }
         }
     }
     Ok(())
 }
 
+/// Sets up the bare bones logger. The caller (`main`) can then choose to chain a log file or not
 fn setup_logger() -> Dispatch {
-    let colors = fern::colors::ColoredLevelConfig::default().info(fern::colors::Color::Green);
     fern::Dispatch::new()
-        .format(move |out, message, record| {
+        .format(|out, message, record| {
+            let colors =
+                fern::colors::ColoredLevelConfig::default().info(fern::colors::Color::Green);
             out.finish(format_args!(
                 "[{} {} {}] {}",
                 humantime::format_rfc3339_seconds(std::time::SystemTime::now()),
