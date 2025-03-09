@@ -1,4 +1,4 @@
-use std::{io::Write, os::unix::net::UnixStream};
+use std::{io::Write, os::unix::net::UnixStream, path::PathBuf};
 
 use crate::{
     constants::*,
@@ -59,15 +59,21 @@ impl WallpaperServer {
     pub fn set_dir(&mut self, stream: &mut UnixStream, value: String) -> Result<(), ServerError> {
         log::info!("Received request: SETDIR");
 
+        let Some((recursive, path)) = value.split_once(',') else {
+            return Err(ServerError::RequestError("Invalid request format"));
+        };
+
+        *self.recursive.lock().unwrap() = recursive.len() > 0;
+
         // Attempt to set the new directory
-        match file_utils::get_directory_files(value.trim()) {
+        match file_utils::get_directory_files(&PathBuf::from(path), recursive.len() > 0) {
             Ok(contents) => {
                 // If successful, set the directory and respond with 200
-                *self.directory.lock().unwrap() = value.clone();
+                *self.directory.lock().unwrap() = path.to_string().clone();
 
                 let response = Packet::new()
                     .method("200")
-                    .body(format!("Wonderwall will now cycle through {}", value).as_str());
+                    .body(format!("Wonderwall will now cycle through {}", path).as_str());
 
                 stream
                     .write_all(&response.as_bytes())

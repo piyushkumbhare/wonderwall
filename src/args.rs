@@ -7,6 +7,10 @@ pub enum Opt {
         /// Directory containing wallpapers to cycle through
         directory: String,
 
+        /// Recursively pulls images from all subdirectories of the specfied one
+        #[arg(short, long, default_value_t = false)]
+        recursive: bool,
+
         /// Redirect log output to log file
         #[arg(short = 'o', long)]
         log: Option<String>,
@@ -36,6 +40,10 @@ pub enum Opt {
     SetDir {
         /// Directory containing wallpapers to cycle through
         directory: String,
+
+        /// Recursively pulls images from all subdirectories of the specfied one
+        #[arg(short, long, default_value_t = false)]
+        recursive: bool
     },
 
     /// Ping the wallpaper server

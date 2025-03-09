@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
     io::{BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Condvar, Mutex},
 };
 
@@ -18,6 +18,7 @@ pub struct WallpaperServer {
     pub main_trigger: Arc<(Mutex<bool>, Condvar)>,
     pub duration: u64,
     pub socket: String,
+    pub recursive: Arc<Mutex<bool>>,
 }
 
 impl Drop for WallpaperServer {
@@ -29,9 +30,14 @@ impl Drop for WallpaperServer {
 
 impl WallpaperServer {
     /// Initializes a `WallpaperServer` instance with a backgrounds directory. The server can then be started with `.start()`
-    pub fn new(directory: String, duration: u64, socket: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        directory: String,
+        duration: u64,
+        socket: &str,
+        recursive: bool,
+    ) -> Result<Self, Box<dyn Error>> {
         // FIXME: What the fuck is this... please load the first wallpaper to the screen and queue the SECOND one
-        let wallpapers = file_utils::get_directory_files(&directory)?;
+        let wallpapers = file_utils::get_directory_files(&PathBuf::from(&directory), recursive)?;
         let first_wallpaper = wallpapers.first().unwrap_or(&String::new()).clone();
 
         // If the path exists, try pinging the server
@@ -57,6 +63,7 @@ impl WallpaperServer {
             main_trigger: Arc::new((Mutex::new(false), Condvar::new())),
             socket: socket.to_string(),
             duration,
+            recursive: Arc::new(Mutex::new(recursive)),
         })
     }
 
@@ -72,24 +79,43 @@ impl WallpaperServer {
         let child_directory = self.directory.clone();
         let mut index = 0;
         let duration = self.duration;
+        let child_recursive = self.recursive.clone();
 
         // TODO: Look for better ways to do this... I don't like how an entirely new function is needed just because `&self.<anything>``
         // causes borrow-checker errors due to `self` being moved
 
         // Spawn the child thread. This thread will be responsible for cycling the wallpaper every DURATION seconds
-        std::thread::spawn(move || loop {
-            match cycle_wallpapers(
-                &child_trigger,
-                &child_wallpaper,
-                &child_directory,
-                &mut index,
-                duration,
-            ) {
-                Ok(_) => {}
-                Err(e) => {
-                    log::error!("Ran into error: {e}");
-                    std::fs::remove_file(FILE_SOCKET).expect("Failed to remove socket file.");
-                    std::process::exit(1);
+        std::thread::spawn(move || -> ! {
+            loop {
+                match cycle_wallpapers(
+                    &child_trigger,
+                    &child_wallpaper,
+                    &child_directory,
+                    &mut index,
+                    duration,
+                    &child_recursive,
+                ) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("Ran into error: {e}");
+                        match e {
+                            ServerError::FileError(msg) => {
+                                if msg != "Empty directory" {
+                                    log::error!("FATAL ERROR. Terminating...");
+                                    std::fs::remove_file(FILE_SOCKET)
+                                        .expect("Failed to remove socket file.");
+                                    std::process::exit(1);
+                                }
+                            }
+                            ServerError::HyprpaperError => {
+                                log::error!("FATAL ERROR. Terminating...");
+                                std::fs::remove_file(FILE_SOCKET)
+                                    .expect("Failed to remove socket file.");
+                                std::process::exit(1);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
         });
@@ -196,13 +222,14 @@ impl WallpaperServer {
 /// Ran by the child thread to periodically cycle wallpapers
 ///
 /// Internally increments `index`.
-fn cycle_wallpapers(
-    child_trigger: &Arc<(Mutex<bool>, Condvar)>,
-    child_wallpaper: &Arc<Mutex<String>>,
-    child_directory: &Arc<Mutex<String>>,
-    index: &mut usize,
+fn cycle_wallpapers<'a>(
+    child_trigger: &'a Arc<(Mutex<bool>, Condvar)>,
+    child_wallpaper: &'a Arc<Mutex<String>>,
+    child_directory: &'a Arc<Mutex<String>>,
+    index: &'a mut usize,
     duration: u64,
-) -> Result<(), Box<dyn Error>> {
+    recursive: &'a Arc<Mutex<bool>>,
+) -> Result<(), ServerError<'a>> {
     let (lock, cvar) = &**child_trigger;
 
     // Wait for trigger or timeout
@@ -215,14 +242,20 @@ fn cycle_wallpapers(
     // Reload directory
     let directory = child_directory.lock().unwrap().clone();
 
-    let wallpapers = file_utils::get_directory_files(&directory)?;
+    let wallpapers = file_utils::get_directory_files(
+        &PathBuf::from(&directory),
+        recursive.lock().unwrap().clone(),
+    )
+    .map_err(|e| {
+        log::error!("{e}");
+        ServerError::FileError("Error in reading directory")
+    })?;
+
     log::info!("Reloaded directory");
 
     // If the wallpaper's directory is empty, we should return an error and leave the index unchanged
     if wallpapers.is_empty() {
-        return Err(Box::new(ServerError::FileError(
-            "Wallpaper directory is empty!",
-        )));
+        return Err(ServerError::FileError("Empty directory"));
     }
 
     // Increment index until we're on a new wallpaper. This should only ever be a
@@ -242,7 +275,8 @@ fn cycle_wallpapers(
     // Change wallpaper
     if !current_wallpaper.is_empty() {
         log::info!("Setting wallpaper: {}", &current_wallpaper);
-        file_utils::hyprpaper_update(&current_wallpaper)?;
+        file_utils::hyprpaper_update(&current_wallpaper)
+            .map_err(|_| ServerError::HyprpaperError)?;
     }
     Ok(())
 }
@@ -252,6 +286,7 @@ fn cycle_wallpapers(
 #[derive(Debug)]
 pub enum ServerError<'a> {
     Kill,
+    HyprpaperError,
     RequestError(&'a str),
     SocketError(&'a str),
     FileError(&'a str),
@@ -261,6 +296,7 @@ impl Display for ServerError<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServerError::Kill => f.write_str("Killed"),
+            ServerError::HyprpaperError => f.write_str("Hyprpaper crashed!"),
             ServerError::RequestError(msg) => f.write_str(msg),
             ServerError::SocketError(msg) => f.write_str(msg),
             ServerError::FileError(msg) => f.write_str(msg),
