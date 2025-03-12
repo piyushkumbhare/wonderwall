@@ -8,8 +8,12 @@ pub enum Opt {
         directory: String,
 
         /// Recursively pulls images from all subdirectories of the specfied one
-        #[arg(short, long, default_value_t = false)]
+        #[arg(short = 'R', long, default_value_t = false)]
         recursive: bool,
+
+        /// Randomizes the order of pictures shown
+        #[arg(short = 'r', long, default_value_t = false)]
+        random: bool,
 
         /// Redirect log output to log file
         #[arg(short = 'o', long)]
@@ -42,8 +46,12 @@ pub enum Opt {
         directory: String,
 
         /// Recursively pulls images from all subdirectories of the specfied one
-        #[arg(short, long, default_value_t = false)]
-        recursive: bool
+        #[arg(short = 'R', long, default_value_t = false)]
+        recursive: bool,
+
+        /// Randomizes the order of pictures shown
+        #[arg(short = 'r', long, default_value_t = false)]
+        random: bool,
     },
 
     /// Ping the wallpaper server

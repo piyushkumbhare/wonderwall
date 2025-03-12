@@ -80,19 +80,16 @@ pub fn get_directory_files(path: &PathBuf, recursive: bool) -> io::Result<Vec<St
     let path = PathBuf::from(path).canonicalize()?;
     let mut images: Vec<String> = vec![];
 
-    for entry in std::fs::read_dir(&path)? {
-        if let Ok(entry) = entry {
-            if let Ok(file_type) = entry.file_type() {
-                if file_type.is_file() {
-                    if let Some(path) = entry.path().to_str() {
-                        images.push(path.to_string())
-                    }
-                } else if file_type.is_dir() && recursive {
-                    images.append(&mut get_directory_files(&entry.path(), true)?);
+    for entry in std::fs::read_dir(&path)?.flatten() {
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_file() {
+                if let Some(path) = entry.path().to_str() {
+                    images.push(path.to_string())
                 }
+            } else if file_type.is_dir() && recursive {
+                images.append(&mut get_directory_files(&entry.path(), true)?);
             }
         }
     }
     Ok(images)
 }
-

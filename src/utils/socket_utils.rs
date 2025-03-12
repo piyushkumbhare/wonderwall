@@ -55,7 +55,7 @@ impl Packet {
 
     /// Deserializes the packet from raw bytes
     pub fn from_bytes<'a>(buffer: Vec<u8>) -> Result<Self, PacketError<'a>> {
-        let re = Regex::new(r#"^([^\r\n]+)\r\n((.+: .+\r\n)*)\r\n(.*)"#).unwrap();
+        let re = Regex::new(r#"^([^\r\n]+)\r\n((.+: .+\r\n)*)\r\n([\s\S]*)"#).unwrap();
 
         let buffer = String::from_utf8(buffer).unwrap();
         let Some(caps) = re.captures(&buffer) else {
