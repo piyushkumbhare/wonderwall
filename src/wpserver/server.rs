@@ -39,6 +39,8 @@ impl WallpaperServer {
         // FIXME: What the fuck is this... please load the first wallpaper to the screen and queue the SECOND one
         let wallpapers = file_utils::get_directory_files(&PathBuf::from(&directory), recursive)?;
         let first_wallpaper = wallpapers.first().unwrap_or(&String::new()).clone();
+        file_utils::hyprpaper_update(&first_wallpaper)?;
+        let second_wallpaper = wallpapers.get(1).unwrap_or(&String::new()).clone();
 
         // If the path exists, try pinging the server
         if Path::new(&socket).exists() {
@@ -59,7 +61,7 @@ impl WallpaperServer {
 
         Ok(WallpaperServer {
             directory: Arc::new(Mutex::new(directory)),
-            wallpaper: Arc::new(Mutex::new(first_wallpaper)),
+            wallpaper: Arc::new(Mutex::new(second_wallpaper)),
             main_trigger: Arc::new((Mutex::new(false), Condvar::new())),
             socket: socket.to_string(),
             duration,
