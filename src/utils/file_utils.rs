@@ -47,31 +47,49 @@ pub fn exec_command(command: &str) -> io::Result<String> {
     Ok(output.stdout.iter().map(|&c| char::from(c)).collect())
 }
 
-pub fn get_directory_files(path: &str) -> io::Result<Vec<String>> {
+//pub fn get_directory_files(path: &str) -> io::Result<Vec<String>> {
+//    let path = PathBuf::from(path).canonicalize()?;
+//
+//    let mut contents: Vec<_> = std::fs::read_dir(&path)?
+//        .filter_map(|e| e.ok())
+//        .filter_map(|e| {
+//            let file_type = e.file_type().ok()?;
+//            let is_file = file_type.is_file();
+//            let path_str = e.path().to_str().map(|s| s.to_string());
+//
+//            // Log each entry's attributes if on debug mode
+//            #[cfg(debug_assertions)]
+//            {
+//                log::debug!(
+//                    "Found entry: {:?}, is_file: {}, path: {:?}",
+//                    e.file_name(),
+//                    is_file,
+//                    path_str
+//                );
+//            }
+//            is_file.then_some(path_str)?
+//        })
+//        .collect();
+//
+//    contents.sort();
+//
+//    Ok(contents)
+//}
+
+pub fn get_directory_files(path: &PathBuf, recursive: bool) -> io::Result<Vec<String>> {
     let path = PathBuf::from(path).canonicalize()?;
+    let mut images: Vec<String> = vec![];
 
-    let mut contents: Vec<_> = std::fs::read_dir(&path)?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let file_type = e.file_type().ok()?;
-            let is_file = file_type.is_file();
-            let path_str = e.path().to_str().map(|s| s.to_string());
-
-            // Log each entry's attributes if on debug mode
-            #[cfg(debug_assertions)]
-            {
-                log::debug!(
-                    "Found entry: {:?}, is_file: {}, path: {:?}",
-                    e.file_name(),
-                    is_file,
-                    path_str
-                );
+    for entry in std::fs::read_dir(&path)?.flatten() {
+        if let Ok(file_type) = entry.file_type() {
+            if file_type.is_file() {
+                if let Some(path) = entry.path().to_str() {
+                    images.push(path.to_string())
+                }
+            } else if file_type.is_dir() && recursive {
+                images.append(&mut get_directory_files(&entry.path(), true)?);
             }
-            is_file.then_some(path_str)?
-        })
-        .collect();
-
-    contents.sort();
-
-    Ok(contents)
+        }
+    }
+    Ok(images)
 }

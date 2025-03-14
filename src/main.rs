@@ -12,7 +12,7 @@ use args::*;
 use constants::*;
 use fern::Dispatch;
 use utils::socket_utils;
-use wpserver::server::WallpaperServer;
+use wpserver::server::{WallpaperOptions, WallpaperServer};
 
 // TODO: See if there's a better way to return out of main... I don't like unnecessarily using Box<dyn Error>.
 // Also for some reason, anyhow::Result<()> won't work with nix::unistd::daemon()'s Error variant
@@ -28,6 +28,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             duration,
             fg: run_here,
             log,
+            recursive,
+            random,
         } => {
             let logger = setup_logger();
             if let Some(log_file) = log {
@@ -37,7 +39,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             .apply()?;
 
-            let mut server = match WallpaperServer::new(directory, duration, FILE_SOCKET) {
+            let options = WallpaperOptions {
+                directory,
+                duration,
+                recursive,
+                random,
+            };
+
+            let mut server = match WallpaperServer::new(options) {
                 Ok(s) => s,
                 Err(e) => {
                     log::error!("Ran into error while creating server: {e}");
@@ -74,8 +83,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Update { path } => socket_utils::send_request("UPDATE", &path, FILE_SOCKET),
                 Next => socket_utils::send_request("NEXT", "", FILE_SOCKET),
                 GetDir => socket_utils::send_request("GETDIR", "", FILE_SOCKET),
-                SetDir { directory } => {
-                    socket_utils::send_request("SETDIR", &directory, FILE_SOCKET)
+                SetDir {
+                    directory,
+                    recursive,
+                    random,
+                } => {
+                    let recursive = match recursive {
+                        true => "true",
+                        false => "",
+                    };
+                    let random = match random {
+                        true => "true",
+                        false => "",
+                    };
+                    socket_utils::send_request(
+                        "SETDIR",
+                        &format!("{}\n{}\n{}", recursive, random, &directory),
+                        FILE_SOCKET,
+                    )
                 }
                 Ping => socket_utils::send_request("PING", "", FILE_SOCKET),
                 Kill => socket_utils::send_request("KILL", "", FILE_SOCKET),
