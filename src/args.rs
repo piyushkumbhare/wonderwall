@@ -29,19 +29,22 @@ pub enum Opt {
     },
 
     /// Manually update the wallpaper with a provided path
-    Update {
+    Setwp {
         /// Path to wallpaper
         path: String,
     },
+
+    /// Print out the current wallpaper's path
+    Getwp,
 
     /// Cycle to the next wallpaper in the queue
     Next,
 
     /// Print out the current wallpaper directory
-    GetDir,
+    Getdir,
 
     /// Set the directory to cycle through
-    SetDir {
+    Setdir {
         /// Directory containing wallpapers to cycle through
         directory: String,
 

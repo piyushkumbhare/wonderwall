@@ -80,10 +80,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         command => {
             // Parse the command and send the appropriate request
             let request_result = match command {
-                Update { path } => socket_utils::send_request("UPDATE", &path, FILE_SOCKET),
+                Setwp { path } => socket_utils::send_request("SETWP", &path, FILE_SOCKET),
+                Getwp => socket_utils::send_request("GETWP", "", FILE_SOCKET),
                 Next => socket_utils::send_request("NEXT", "", FILE_SOCKET),
-                GetDir => socket_utils::send_request("GETDIR", "", FILE_SOCKET),
-                SetDir {
+                Getdir => socket_utils::send_request("GETDIR", "", FILE_SOCKET),
+                Setdir {
                     directory,
                     recursive,
                     random,
