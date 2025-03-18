@@ -8,12 +8,13 @@ use crate::{
 use super::server::*;
 
 impl WallpaperServer {
-    pub fn update(&mut self, stream: &mut UnixStream, value: String) -> Result<(), ServerError> {
-        log::info!("Received request: UPDATE");
+    pub fn set_wp(&mut self, stream: &mut UnixStream, value: String) -> Result<(), ServerError> {
+        log::info!("Received request: SETWP");
         let mut data = self.data.lock().unwrap();
 
-        data.wallpaper = value.clone();
+        data.next_wallpaper = value.clone();
 
+        // Trigger wallpaper switch event
         let (lock, cvar) = &*self.main_trigger;
 
         let mut trigger = lock.lock().unwrap();
@@ -30,12 +31,24 @@ impl WallpaperServer {
         Ok(())
     }
 
+    pub fn get_wp(&mut self, stream: &mut UnixStream) -> Result<(), ServerError> {
+        log::info!("Received request: GETWP");
+        let data = self.data.lock().unwrap();
+
+        let cur_wp = data.current_wallpaper.clone();
+        let response = Packet::new().method("200").body(&cur_wp);
+        stream
+            .write_all(&response.as_bytes())
+            .map_err(|_| ServerError::SocketError(SOCKET_WRITE_ERROR))?;
+        Ok(())
+    }
+
     pub fn next(&mut self, stream: &mut UnixStream) -> Result<(), ServerError> {
         log::info!("Received request: NEXT");
         let data = self.data.lock().unwrap();
 
         let (lock, cvar) = &*self.main_trigger;
-        let next_wallpaper = data.wallpaper.clone();
+        let next_wallpaper = data.current_wallpaper.clone();
 
         let mut trigger = lock.lock().unwrap();
         *trigger = true;
@@ -90,7 +103,7 @@ impl WallpaperServer {
                 data.directory = path.to_string().clone();
 
                 if let Some(new_first_wallpaper) = contents.first() {
-                    data.wallpaper = new_first_wallpaper.clone();
+                    data.current_wallpaper = new_first_wallpaper.clone();
                     let (lock, cvar) = &*self.main_trigger;
 
                     let mut trigger = lock.lock().unwrap();

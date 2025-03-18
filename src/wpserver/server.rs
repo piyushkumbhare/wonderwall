@@ -23,7 +23,8 @@ pub struct WallpaperOptions {
 
 pub struct WallpaperData {
     pub directory: String,
-    pub wallpaper: String,
+    pub current_wallpaper: String,
+    pub next_wallpaper: String,
     pub recursive: bool,
     pub random: bool,
     pub index: usize,
@@ -77,8 +78,24 @@ impl WallpaperServer {
             false => 0,
         };
 
+        let second_index = match random {
+            true => {
+                let mut second_index = rand::random_range(..wallpapers.len());
+                while second_index == first_index {
+                    second_index = rand::random_range(..wallpapers.len())
+                }
+                second_index
+            }
+            false => 1,
+        };
+
         let first_wallpaper = wallpapers
             .get(first_index)
+            .unwrap_or(&String::new())
+            .clone();
+
+        let second_wallpaper = wallpapers
+            .get(second_index)
             .unwrap_or(&String::new())
             .clone();
 
@@ -87,7 +104,8 @@ impl WallpaperServer {
             duration,
             data: Arc::new(Mutex::new(WallpaperData {
                 directory,
-                wallpaper: first_wallpaper,
+                current_wallpaper: first_wallpaper,
+                next_wallpaper: second_wallpaper,
                 recursive,
                 random,
                 index: 0,
@@ -213,7 +231,8 @@ impl WallpaperServer {
 
         // Handle Wallpaper command
         match command.to_uppercase().as_str() {
-            "UPDATE" => self.update(&mut stream, request.body)?,
+            "GETWP" => self.get_wp(&mut stream)?,
+            "SETWP" => self.set_wp(&mut stream, request.body)?,
             "NEXT" => self.next(&mut stream)?,
             "GETDIR" => self.get_dir(&mut stream)?,
             "SETDIR" => self.set_dir(&mut stream, request.body)?,
@@ -258,11 +277,9 @@ fn cycle_wallpapers<'a>(
         return Err(ServerError::FileError("Empty directory"));
     }
 
-    let current_wallpaper = data.wallpaper.clone();
-
     // Change index until we're on a new wallpaper. This should only ever be a
     // problem when multiple files have the same name or the directory grows in size
-    while wallpapers[data.index % wallpapers.len()] == current_wallpaper {
+    while wallpapers[data.index % wallpapers.len()] == data.next_wallpaper {
         match data.random {
             true => data.index = rand::random_range(..wallpapers.len()),
             false => data.index += 1,
@@ -272,16 +289,15 @@ fn cycle_wallpapers<'a>(
     data.index %= wallpapers.len();
 
     // Queue the next wallpaper
-    data.wallpaper = wallpapers[data.index].clone();
+    data.current_wallpaper = data.next_wallpaper.clone();
+    data.next_wallpaper = wallpapers[data.index].clone();
 
-    log::info!("Queued wallpaper: {}", data.wallpaper);
+    log::info!("Queued wallpaper: {}", data.current_wallpaper);
 
     // Change wallpaper
-    if !current_wallpaper.is_empty() {
-        log::info!("Setting wallpaper: {}", &current_wallpaper);
-        file_utils::hyprpaper_update(&current_wallpaper)
-            .map_err(|_| ServerError::HyprpaperError)?;
-    }
+    log::info!("Setting wallpaper: {}", &data.current_wallpaper);
+    file_utils::hyprpaper_update(&data.current_wallpaper)
+        .map_err(|_| ServerError::HyprpaperError)?;
 
     drop(data);
     // Wait for trigger or timeout
